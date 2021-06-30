@@ -18,6 +18,8 @@ package edgedb
 
 import (
 	"crypto/sha1"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io/ioutil"
 	"net/url"
@@ -41,6 +43,7 @@ type connConfig struct {
 	connectTimeout     time.Duration
 	waitUntilAvailable time.Duration
 	serverSettings     map[string]string
+	tlsConfig          *tls.Config
 }
 
 type dialArgs struct {
@@ -195,6 +198,9 @@ func parseConnectDSNAndArgs(
 	user := opts.User
 	password := opts.Password
 	database := opts.Database
+	certFile := opts.TLSCertFile
+	verifyHostname := opts.TLSVerifyHostname
+	var certData []byte
 
 	serverSettings := make(map[string]string, len(opts.ServerSettings))
 	for k, v := range opts.ServerSettings {
@@ -318,6 +324,16 @@ func parseConnectDSNAndArgs(
 				password = val
 			}
 
+			if val := pop(query, "tls_cert_file"); certFile == "" {
+				certFile = val
+			}
+
+			// todo: can't determin if the user specified verifyHostname in
+			// their Option struct or not...
+			// if val := pop(query, "tls_verify_hostname"); verifyHostname == ? {
+			// 	verifyHostname = val
+			// }
+
 			for k, v := range query {
 				serverSettings[k] = v
 			}
@@ -364,6 +380,15 @@ func parseConnectDSNAndArgs(
 
 		if database == "" {
 			database = creds.database
+		}
+
+		if certFile == "" {
+			certData = creds.certData
+		}
+
+		// todo: fix check for unset value
+		if verifyHostname == false {
+			verifyHostname = creds.verifyHostname
 		}
 	}
 
@@ -448,6 +473,50 @@ func parseConnectDSNAndArgs(
 		waitUntilAvailable = 30 * time.Second
 	}
 
+	roots, err := getCertPool()
+	if err != nil {
+		return nil, &configurationError{err: err}
+	}
+
+	if certFile != "" {
+		// certFile overrides certData
+		certData, err = ioutil.ReadFile(certFile)
+		if err != nil {
+			return nil, &configurationError{err: err}
+		}
+	}
+
+	if len(certData) != 0 {
+		ok := roots.AppendCertsFromPEM(certData)
+		if !ok {
+			return nil, &configurationError{msg: "invalid certificate data"}
+		}
+	}
+
+	tlsConfig := &tls.Config{
+		RootCAs:    roots,
+		NextProtos: []string{"edgedb-binary"},
+	}
+
+	if !verifyHostname {
+		// Set InsecureSkipVerify to skip the default validation we are
+		// replacing. This will not disable VerifyConnection.
+		tlsConfig.InsecureSkipVerify = true
+
+		tlsConfig.VerifyConnection = func(cs tls.ConnectionState) error {
+			opts := x509.VerifyOptions{
+				DNSName:       cs.ServerName,
+				Intermediates: x509.NewCertPool(),
+				Roots:         roots,
+			}
+			for _, cert := range cs.PeerCertificates[1:] {
+				opts.Intermediates.AddCert(cert)
+			}
+			_, err := cs.PeerCertificates[0].Verify(opts)
+			return err
+		}
+	}
+
 	cfg := &connConfig{
 		addrs:              addrs,
 		user:               user,
@@ -456,6 +525,7 @@ func parseConnectDSNAndArgs(
 		connectTimeout:     opts.ConnectTimeout,
 		waitUntilAvailable: waitUntilAvailable,
 		serverSettings:     serverSettings,
+		tlsConfig:          tlsConfig,
 	}
 
 	return cfg, nil

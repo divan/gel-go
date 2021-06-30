@@ -97,6 +97,15 @@ type Options struct {
 	// Has no effect for single connections.
 	MaxConns uint
 
+	// Read the TLS certificate from this file
+	TLSCertFile string
+
+	// todo maybe use OptionalBool instead of bool
+	// so that we can determine if the user set the value or not.
+
+	// If false don't verify the hostname when using TLS.
+	TLSVerifyHostname bool
+
 	// ServerSettings is currently unused.
 	ServerSettings map[string]string
 }

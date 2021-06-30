@@ -152,6 +152,13 @@ func (c *baseConn) connect(r *buff.Reader, cfg *connConfig) error {
 		}
 	}
 
+	if c.transport == "tcp" && c.protocolVersion.gte(version{0, 11}) {
+		_ = c.close()
+		return &clientConnectionError{msg: fmt.Sprintf(
+			"server clamming to use protocol version %v.%v without using TLS",
+			c.protocolVersion.major, c.protocolVersion.minor)}
+	}
+
 	if r.Err != nil {
 		return &clientConnectionError{err: r.Err}
 	}

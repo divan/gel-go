@@ -19,3 +19,9 @@
 package edgedb
 
 var defaultHosts = []string{"localhost"}
+
+func getCertPool() (*x509.CertPool, error) {
+	// x509.SystemCertPool() doesn't work on Windows.
+	// https://github.com/golang/go/issues/16736
+	return x509.NewCertPool(), nil
+}
